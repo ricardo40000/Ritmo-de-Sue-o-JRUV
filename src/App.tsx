@@ -8,6 +8,8 @@ const formatTime = (seconds: number) => {
   return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
+const SILENT_AUDIO_URI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
 const createNoiseBuffer = (ctx: AudioContext, type: 'white' | 'pink') => {
   const bufferSize = ctx.sampleRate * 2;
   const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
@@ -229,6 +231,7 @@ export default function App() {
   const [showInfo, setShowInfo] = useState(false);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const ambientNodesRef = useRef<any>({});
   const settingsRef = useRef({
     mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled, singleSound, heartbeatSound
@@ -246,6 +249,35 @@ export default function App() {
       setTimeRemaining(durationMins * 60);
     }
   }, [startBpm, durationMins, isPlaying]);
+
+  // Handle HTML5 Audio and Media Session for background playback
+  useEffect(() => {
+    if (!silentAudioRef.current) {
+      const audio = new Audio(SILENT_AUDIO_URI);
+      audio.loop = true;
+      audio.playsInline = true;
+      silentAudioRef.current = audio;
+    }
+
+    if (isPlaying) {
+      silentAudioRef.current.play().catch(e => console.log("Silent audio play failed:", e));
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Latido Relajante',
+          artist: 'Terapia de Sonido',
+          artwork: [
+            { src: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=512&h=512&fit=crop', sizes: '512x512', type: 'image/png' }
+          ]
+        });
+        navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
+        navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
+      }
+    } else {
+      if (silentAudioRef.current) {
+        silentAudioRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
 
   // Update ambient volumes
   useEffect(() => {
@@ -846,6 +878,7 @@ export default function App() {
             >
               {vibrationEnabled ? <Vibrate className="w-6 h-6 mb-2" /> : <VibrateOff className="w-6 h-6 mb-2" />}
               <span className="text-xs font-bold uppercase tracking-wider">Vibración</span>
+              <span className="text-[10px] text-slate-500 mt-1">(Solo Android)</span>
             </button>
             
             <button
