@@ -8,7 +8,7 @@ const formatTime = (seconds: number) => {
   return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
-const SILENT_AUDIO_URI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+const SILENT_AUDIO_URI = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU5LjI3LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU5LjM3AAAAAAAAAAAAAAAAJAAAAAAAAAAAASAErEIAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFN//MUZAMAAAGkAAAAAAAAA0gAAAAARTMu//MUZAYAAAGkAAAAAAAAA0gAAAAAOTku//MUZAwAAAGkAAAAAAAAA0gAAAAAOTku";
 
 // Web Worker for unthrottled background timer
 const workerCode = `
@@ -285,23 +285,37 @@ export default function App() {
       silentAudioRef.current = audio;
     }
 
-    if (isPlaying) {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: 'Latido Relajante',
-          artist: 'Terapia de Sonido',
-          artwork: [
-            { src: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=512&h=512&fit=crop', sizes: '512x512', type: 'image/png' }
-          ]
-        });
-        navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
-        navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
-      }
-    } else {
-      if (silentAudioRef.current) {
-        silentAudioRef.current.pause();
-      }
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'Latido Relajante',
+        artist: 'Terapia de Sonido',
+        artwork: [
+          { src: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=512&h=512&fit=crop', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+      navigator.mediaSession.setActionHandler('play', () => {
+        setIsPlaying(true);
+        if (silentAudioRef.current) silentAudioRef.current.play().catch(() => {});
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        setIsPlaying(false);
+        if (silentAudioRef.current) silentAudioRef.current.pause();
+      });
     }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isPlaying) {
+        if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+          audioCtxRef.current.resume();
+        }
+        if (silentAudioRef.current && silentAudioRef.current.paused) {
+          silentAudioRef.current.play().catch(() => {});
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isPlaying]);
 
   // Update ambient volumes
@@ -660,11 +674,26 @@ export default function App() {
 
   const togglePlay = () => {
     if (!isPlaying) {
+      // Initialize AudioContext on user gesture
+      if (!audioCtxRef.current) {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtxRef.current = new AudioContextClass();
+        }
+      }
+      
       if (silentAudioRef.current) {
         silentAudioRef.current.play().catch(e => console.log("Silent audio play failed:", e));
       }
       if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
         audioCtxRef.current.resume();
+      }
+    } else {
+      if (silentAudioRef.current) {
+        silentAudioRef.current.pause();
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'running') {
+        audioCtxRef.current.suspend();
       }
     }
     setIsPlaying(!isPlaying);
