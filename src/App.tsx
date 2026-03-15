@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Volume2, VolumeX, Vibrate, VibrateOff, Info, Moon, Heart, Activity } from 'lucide-react';
+import { Play, Square, Volume2, VolumeX, Vibrate, VibrateOff, Info, Moon, Heart, Activity, Waves, Wind, Bird, Leaf, CloudRain } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const formatTime = (seconds: number) => {
@@ -8,13 +8,206 @@ const formatTime = (seconds: number) => {
   return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
+const createNoiseBuffer = (ctx: AudioContext, type: 'white' | 'pink') => {
+  const bufferSize = ctx.sampleRate * 2;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const output = buffer.getChannelData(0);
+  if (type === 'white') {
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = Math.random() * 2 - 1;
+    }
+  } else {
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < bufferSize; i++) {
+      let white = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.96900 * b2 + white * 0.1538520;
+      b3 = 0.86650 * b3 + white * 0.3104856;
+      b4 = 0.55000 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.0168980;
+      output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+      output[i] *= 0.11;
+      b6 = white * 0.115926;
+    }
+  }
+  return buffer;
+};
+
+const startAmbientSounds = (ctx: AudioContext) => {
+  const nodes: any = {};
+  const sources: AudioBufferSourceNode[] = [];
+  const oscillators: OscillatorNode[] = [];
+
+  const whiteNoise = createNoiseBuffer(ctx, 'white');
+  const pinkNoise = createNoiseBuffer(ctx, 'pink');
+
+  const createNoiseSource = (buffer: AudioBuffer) => {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.start();
+    sources.push(src);
+    return src;
+  };
+
+  // Master Limiter to prevent ANY clipping
+  nodes.master = ctx.createDynamicsCompressor();
+  nodes.master.threshold.value = -1;
+  nodes.master.knee.value = 2;
+  nodes.master.ratio.value = 20;
+  nodes.master.attack.value = 0.002;
+  nodes.master.release.value = 0.1;
+  nodes.master.connect(ctx.destination);
+
+  // 1. Sea
+  const seaSrc = createNoiseSource(pinkNoise);
+  const seaFilter = ctx.createBiquadFilter();
+  seaFilter.type = 'lowpass';
+  const seaLfo = ctx.createOscillator();
+  seaLfo.frequency.value = 0.1;
+  const seaLfoGain = ctx.createGain();
+  seaLfoGain.gain.value = 400;
+  seaFilter.frequency.value = 400;
+  seaLfo.connect(seaLfoGain).connect(seaFilter.frequency);
+  seaLfo.start();
+  oscillators.push(seaLfo);
+  nodes.seaGain = ctx.createGain();
+  nodes.seaGain.gain.value = 0;
+  seaSrc.connect(seaFilter).connect(nodes.seaGain).connect(nodes.master);
+
+  // 2. Wind
+  const windSrc = createNoiseSource(pinkNoise);
+  const windFilter = ctx.createBiquadFilter();
+  windFilter.type = 'bandpass';
+  windFilter.Q.value = 1.5;
+  const windLfo = ctx.createOscillator();
+  windLfo.frequency.value = 0.15;
+  const windLfoGain = ctx.createGain();
+  windLfoGain.gain.value = 300;
+  windFilter.frequency.value = 500;
+  windLfo.connect(windLfoGain).connect(windFilter.frequency);
+  windLfo.start();
+  oscillators.push(windLfo);
+  nodes.windGain = ctx.createGain();
+  nodes.windGain.gain.value = 0;
+  windSrc.connect(windFilter).connect(nodes.windGain).connect(nodes.master);
+
+  // 3. Forest (Birds)
+  nodes.forestGain = ctx.createGain();
+  nodes.forestGain.gain.value = 0;
+  nodes.forestGain.connect(nodes.master);
+
+  let isBirdPlaying = true;
+  let birdTimeout: number;
+
+  const playBirdChirp = () => {
+    if (!isBirdPlaying) return;
+    
+    const now = ctx.currentTime;
+    const numChirps = Math.floor(Math.random() * 4) + 1; // 1 to 4 chirps
+    
+    // Randomize bird characteristics for this cluster
+    const baseFreq = 2500 + Math.random() * 3000; // 2.5kHz - 5.5kHz
+    const sweepDir = Math.random() > 0.4 ? 1 : -1; // Slightly more upward sweeps
+    const sweepAmount = 400 + Math.random() * 1500;
+    const duration = 0.08 + Math.random() * 0.1; // 80ms to 180ms
+    
+    for (let i = 0; i < numChirps; i++) {
+      const timeOffset = now + i * (duration + 0.05) + Math.random() * 0.05;
+      
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(nodes.forestGain);
+      
+      osc.type = 'sine';
+      
+      // Frequency sweep
+      osc.frequency.setValueAtTime(baseFreq, timeOffset);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(100, baseFreq + (sweepAmount * sweepDir)), timeOffset + duration);
+      
+      // Amplitude envelope
+      gain.gain.setValueAtTime(0, timeOffset);
+      gain.gain.linearRampToValueAtTime(0.4, timeOffset + duration * 0.2);
+      gain.gain.exponentialRampToValueAtTime(0.001, timeOffset + duration);
+      
+      osc.start(timeOffset);
+      osc.stop(timeOffset + duration);
+    }
+    
+    // Schedule next bird sound (1.5 to 5 seconds)
+    birdTimeout = window.setTimeout(playBirdChirp, 1500 + Math.random() * 3500);
+  };
+  
+  playBirdChirp();
+
+  // 4. Leaves
+  const leavesSrc = createNoiseSource(whiteNoise);
+  const leavesFilter = ctx.createBiquadFilter();
+  leavesFilter.type = 'bandpass';
+  leavesFilter.frequency.value = 3000;
+  leavesFilter.Q.value = 0.5;
+  const leavesLfo = ctx.createOscillator();
+  leavesLfo.frequency.value = 0.5;
+  const leavesLfoGain = ctx.createGain();
+  leavesLfoGain.gain.value = 1500;
+  leavesLfo.connect(leavesLfoGain).connect(leavesFilter.frequency);
+  leavesLfo.start();
+  oscillators.push(leavesLfo);
+  nodes.leavesGain = ctx.createGain();
+  nodes.leavesGain.gain.value = 0;
+  leavesSrc.connect(leavesFilter).connect(nodes.leavesGain).connect(nodes.master);
+
+  // 5. Rain
+  const rainSrc = createNoiseSource(pinkNoise);
+  const rainFilter = ctx.createBiquadFilter();
+  rainFilter.type = 'lowpass';
+  rainFilter.frequency.value = 1000;
+  nodes.rainGain = ctx.createGain();
+  nodes.rainGain.gain.value = 0;
+  rainSrc.connect(rainFilter).connect(nodes.rainGain).connect(nodes.master);
+
+  nodes.stopAll = () => {
+    isBirdPlaying = false;
+    window.clearTimeout(birdTimeout);
+    sources.forEach(s => { s.stop(); s.disconnect(); });
+    oscillators.forEach(o => { o.stop(); o.disconnect(); });
+  };
+
+  return nodes;
+};
+
+const AmbientSlider = ({ icon, label, value, onChange }: any) => (
+  <div className="flex items-center gap-4">
+    <div className={`p-2 rounded-full ${value > 0 ? 'bg-indigo-500/20 text-indigo-400' : 'bg-slate-800 text-slate-500'}`}>
+      {React.cloneElement(icon, { className: 'w-5 h-5' })}
+    </div>
+    <div className="flex-1">
+      <div className="flex justify-between mb-1">
+        <label className="text-xs font-medium text-slate-400">{label}</label>
+        <span className="text-xs font-bold text-slate-300">{value}%</span>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="100"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+      />
+    </div>
+  </div>
+);
+
 export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState<'constant' | 'progressive'>('progressive');
   const [pulseType, setPulseType] = useState<'single' | 'heartbeat'>('single');
   const [startBpm, setStartBpm] = useState(60);
   const [minBpm, setMinBpm] = useState(40);
-  const [intensity, setIntensity] = useState(50); // 1-100
+  const [intensity, setIntensity] = useState(25); // 1-100
   const [durationMins, setDurationMins] = useState(15); // 1-60
   
   const [currentBpm, setCurrentBpm] = useState(60);
@@ -23,18 +216,28 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   
+  const [singleSound, setSingleSound] = useState('soft');
+  const [heartbeatSound, setHeartbeatSound] = useState('organic');
+  
+  const [volSea, setVolSea] = useState(0);
+  const [volWind, setVolWind] = useState(0);
+  const [volForest, setVolForest] = useState(0);
+  const [volLeaves, setVolLeaves] = useState(0);
+  const [volRain, setVolRain] = useState(0);
+  
   const [pulseTrigger, setPulseTrigger] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const ambientNodesRef = useRef<any>({});
   const settingsRef = useRef({
-    mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled
+    mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled, singleSound, heartbeatSound
   });
 
   // Update refs so the interval doesn't need to restart on setting change
   useEffect(() => {
-    settingsRef.current = { mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled };
-  }, [mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled]);
+    settingsRef.current = { mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled, singleSound, heartbeatSound };
+  }, [mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled, singleSound, heartbeatSound]);
 
   // Reset current BPM and time when not playing and settings change
   useEffect(() => {
@@ -43,6 +246,20 @@ export default function App() {
       setTimeRemaining(durationMins * 60);
     }
   }, [startBpm, durationMins, isPlaying]);
+
+  // Update ambient volumes
+  useEffect(() => {
+    if (ambientNodesRef.current && audioCtxRef.current) {
+      const nodes = ambientNodesRef.current;
+      const t = 0.1; // smoothing
+      const now = audioCtxRef.current.currentTime;
+      if (nodes.seaGain) nodes.seaGain.gain.setTargetAtTime(volSea / 100, now, t);
+      if (nodes.windGain) nodes.windGain.gain.setTargetAtTime(volWind / 100, now, t);
+      if (nodes.forestGain) nodes.forestGain.gain.setTargetAtTime((volForest / 100) * 0.6, now, t);
+      if (nodes.leavesGain) nodes.leavesGain.gain.setTargetAtTime((volLeaves / 100) * 0.3, now, t);
+      if (nodes.rainGain) nodes.rainGain.gain.setTargetAtTime((volRain / 100) * 1.5, now, t);
+    }
+  }, [volSea, volWind, volForest, volLeaves, volRain]);
 
   // Wake Lock
   useEffect(() => {
@@ -86,6 +303,18 @@ export default function App() {
     
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
+    }
+
+    // Initialize ambient sounds
+    if (audioCtxRef.current && !ambientNodesRef.current.stopAll) {
+      ambientNodesRef.current = startAmbientSounds(audioCtxRef.current);
+      const nodes = ambientNodesRef.current;
+      const now = audioCtxRef.current.currentTime;
+      nodes.seaGain.gain.setValueAtTime(volSea / 100, now);
+      nodes.windGain.gain.setValueAtTime(volWind / 100, now);
+      nodes.forestGain.gain.setValueAtTime((volForest / 100) * 0.6, now);
+      nodes.leavesGain.gain.setValueAtTime((volLeaves / 100) * 0.3, now);
+      nodes.rainGain.gain.setValueAtTime((volRain / 100) * 1.5, now);
     }
 
     // Silent audio loop to keep background execution alive on mobile
@@ -140,43 +369,202 @@ export default function App() {
       // Play pulse (Sound)
       if (soundEnabled && audioCtxRef.current) {
         const ctx = audioCtxRef.current;
-        const maxGain = (intensity / 100) * 2.5; // Compensate for lowpass filter
+        // High gain for volume, but routed through a compressor to prevent clipping/static
+        const maxGain = (intensity / 100) * 2.5; 
         
-        const playTone = (timeOffset: number, duration: number, startFreq: number, endFreq: number, gainMult: number = 1) => {
-          const osc = ctx.createOscillator();
+        const playSound = (timeOffset: number, isHeartbeat: boolean, type: 'lub' | 'dub' = 'lub') => {
+          const subOsc = ctx.createOscillator();
+          const fleshOsc = ctx.createOscillator();
           const filter = ctx.createBiquadFilter();
           const gain = ctx.createGain();
+          const compressor = ctx.createDynamicsCompressor();
           
-          osc.connect(filter);
+          // Limiter settings: prevents signal from exceeding 0dB (no clipping)
+          compressor.threshold.value = -5;
+          compressor.knee.value = 5;
+          compressor.ratio.value = 20;
+          compressor.attack.value = 0.002;
+          compressor.release.value = 0.1;
+          
+          // Mix the deep sub and the textured "flesh" sound
+          subOsc.connect(gain);
+          fleshOsc.connect(filter);
           filter.connect(gain);
-          gain.connect(ctx.destination);
+          gain.connect(compressor);
           
-          // Triangle wave with a lowpass filter creates a muffled, organic "thud"
-          osc.type = 'triangle';
+          // Connect to master limiter if it exists, otherwise destination
+          const masterNode = ambientNodesRef.current?.master || ctx.destination;
+          compressor.connect(masterNode);
           
-          filter.type = 'lowpass';
-          filter.frequency.setValueAtTime(150, ctx.currentTime + timeOffset);
-          filter.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + timeOffset + duration);
+          const now = ctx.currentTime + timeOffset;
+          let duration = 0.3;
+          let attack = 0.02;
+          let volMult = 1.0;
+
+          if (isHeartbeat) {
+            const isDub = type === 'dub';
+            const { heartbeatSound } = settingsRef.current;
+            
+            if (heartbeatSound === 'organic') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'square';
+              duration = isDub ? 0.25 : 0.4;
+              attack = isDub ? 0.02 : 0.06;
+              const startFreq = isDub ? 100 : 70;
+              const endFreq = isDub ? 40 : 35;
+              
+              filter.type = 'lowpass';
+              filter.Q.value = 0.1; 
+              filter.frequency.setValueAtTime(isDub ? 200 : 120, now);
+              filter.frequency.exponentialRampToValueAtTime(40, now + duration * 0.3);
+              
+              subOsc.frequency.setValueAtTime(startFreq, now);
+              subOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.4);
+              fleshOsc.frequency.setValueAtTime(startFreq, now);
+              fleshOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.4);
+              volMult = isDub ? 0.6 : 1.0;
+            } 
+            else if (heartbeatSound === 'deep') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'sine';
+              duration = isDub ? 0.3 : 0.4;
+              attack = isDub ? 0.03 : 0.08;
+              const startFreq = isDub ? 80 : 60;
+              const endFreq = isDub ? 35 : 30;
+              
+              filter.type = 'lowpass';
+              filter.frequency.setValueAtTime(100, now);
+              
+              subOsc.frequency.setValueAtTime(startFreq, now);
+              subOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.5);
+              fleshOsc.frequency.setValueAtTime(0, now);
+              volMult = isDub ? 0.7 : 1.0;
+            }
+            else if (heartbeatSound === 'muffled') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'triangle';
+              duration = isDub ? 0.25 : 0.4;
+              attack = isDub ? 0.04 : 0.1;
+              const startFreq = isDub ? 80 : 50;
+              const endFreq = isDub ? 30 : 25;
+              
+              filter.type = 'lowpass';
+              filter.frequency.setValueAtTime(isDub ? 100 : 80, now);
+              filter.frequency.exponentialRampToValueAtTime(30, now + duration * 0.5);
+              
+              subOsc.frequency.setValueAtTime(startFreq, now);
+              subOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.5);
+              fleshOsc.frequency.setValueAtTime(startFreq, now);
+              fleshOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.5);
+              volMult = isDub ? 0.5 : 0.8;
+            }
+            else if (heartbeatSound === 'strong') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'square';
+              duration = isDub ? 0.2 : 0.35;
+              attack = isDub ? 0.01 : 0.03;
+              const startFreq = isDub ? 120 : 90;
+              const endFreq = isDub ? 45 : 40;
+              
+              filter.type = 'lowpass';
+              filter.frequency.setValueAtTime(isDub ? 400 : 300, now);
+              filter.frequency.exponentialRampToValueAtTime(50, now + duration * 0.3);
+              
+              subOsc.frequency.setValueAtTime(startFreq, now);
+              subOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.4);
+              fleshOsc.frequency.setValueAtTime(startFreq, now);
+              fleshOsc.frequency.exponentialRampToValueAtTime(endFreq, now + duration * 0.4);
+              volMult = isDub ? 0.8 : 1.2;
+            }
+            else if (heartbeatSound === 'electronic') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'sine';
+              duration = isDub ? 0.3 : 0.5;
+              attack = 0.005;
+              const startFreq = isDub ? 200 : 150;
+              const endFreq = 40;
+              
+              filter.type = 'lowpass';
+              filter.frequency.setValueAtTime(1000, now);
+              
+              subOsc.frequency.setValueAtTime(startFreq, now);
+              subOsc.frequency.exponentialRampToValueAtTime(endFreq, now + 0.05);
+              fleshOsc.frequency.setValueAtTime(0, now);
+              volMult = isDub ? 0.6 : 1.0;
+            }
+          } else {
+            // Single pulse sounds
+            const { singleSound } = settingsRef.current;
+            if (singleSound === 'soft') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'sine';
+              duration = 0.4;
+              attack = 0.08;
+              subOsc.frequency.setValueAtTime(120, now);
+              subOsc.frequency.exponentialRampToValueAtTime(60, now + duration);
+              fleshOsc.frequency.setValueAtTime(0, now);
+            }
+            else if (singleSound === 'deep') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'sine';
+              duration = 0.5;
+              attack = 0.02;
+              subOsc.frequency.setValueAtTime(80, now);
+              subOsc.frequency.exponentialRampToValueAtTime(30, now + duration);
+              fleshOsc.frequency.setValueAtTime(0, now);
+            }
+            else if (singleSound === 'sharp') {
+              subOsc.type = 'triangle';
+              fleshOsc.type = 'sine';
+              duration = 0.2;
+              attack = 0.005;
+              subOsc.frequency.setValueAtTime(250, now);
+              subOsc.frequency.exponentialRampToValueAtTime(80, now + duration);
+              fleshOsc.frequency.setValueAtTime(0, now);
+            }
+            else if (singleSound === 'click') {
+              subOsc.type = 'square';
+              fleshOsc.type = 'square';
+              duration = 0.05;
+              attack = 0.001;
+              filter.type = 'highpass';
+              filter.frequency.setValueAtTime(1000, now);
+              subOsc.frequency.setValueAtTime(800, now);
+              subOsc.frequency.exponentialRampToValueAtTime(200, now + duration);
+              fleshOsc.frequency.setValueAtTime(0, now);
+            }
+            else if (singleSound === 'aura') {
+              subOsc.type = 'sine';
+              fleshOsc.type = 'triangle';
+              duration = 0.6;
+              attack = 0.15;
+              subOsc.frequency.setValueAtTime(150, now);
+              subOsc.frequency.exponentialRampToValueAtTime(60, now + duration);
+              fleshOsc.frequency.setValueAtTime(150, now);
+              fleshOsc.frequency.exponentialRampToValueAtTime(60, now + duration);
+              filter.type = 'lowpass';
+              filter.frequency.setValueAtTime(400, now);
+              filter.frequency.exponentialRampToValueAtTime(100, now + duration);
+              volMult = 0.8;
+            }
+          }
+
+          // Amplitude envelope
+          gain.gain.setValueAtTime(0, now);
+          gain.gain.linearRampToValueAtTime(maxGain * volMult, now + attack);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
           
-          osc.frequency.setValueAtTime(startFreq, ctx.currentTime + timeOffset);
-          osc.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + timeOffset + duration);
-          
-          // Smooth attack and decay to prevent the "pop" or "click" sound
-          gain.gain.setValueAtTime(0, ctx.currentTime + timeOffset);
-          gain.gain.linearRampToValueAtTime(maxGain * gainMult, ctx.currentTime + timeOffset + 0.03);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + timeOffset + duration);
-          
-          osc.start(ctx.currentTime + timeOffset);
-          osc.stop(ctx.currentTime + timeOffset + duration);
+          subOsc.start(now);
+          fleshOsc.start(now);
+          subOsc.stop(now + duration);
+          fleshOsc.stop(now + duration);
         };
 
         if (pulseType === 'heartbeat') {
-          // "Lub... dub"
-          playTone(0, 0.3, 45, 20, 1); // First beat (lub)
-          playTone(0.25, 0.25, 50, 25, 0.7); // Second beat (dub)
+          playSound(0, true, 'lub'); 
+          playSound(0.28, true, 'dub'); 
         } else {
-          // Single "Tun"
-          playTone(0, 0.3, 45, 20, 1);
+          playSound(0, false);
         }
       }
       
@@ -203,6 +591,10 @@ export default function App() {
       window.clearTimeout(timeoutId);
       if (silentSource) {
         silentSource.stop();
+      }
+      if (ambientNodesRef.current?.stopAll) {
+        ambientNodesRef.current.stopAll();
+        ambientNodesRef.current = {};
       }
     };
   }, [isPlaying]);
@@ -316,7 +708,41 @@ export default function App() {
             </button>
           </div>
 
-          <div className="space-y-6">
+          {/* Sound Variant Dropdown */}
+          <div className="pt-4">
+            <label className="text-sm font-medium text-slate-400 mb-2 block">
+              Tipo de Sonido
+            </label>
+            {pulseType === 'single' ? (
+              <select 
+                value={singleSound}
+                onChange={(e) => setSingleSound(e.target.value)}
+                disabled={isPlaying}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50 transition-colors"
+              >
+                <option value="soft">Suave</option>
+                <option value="deep">Profundo</option>
+                <option value="sharp">Nítido</option>
+                <option value="click">Click</option>
+                <option value="aura">Aura</option>
+              </select>
+            ) : (
+              <select 
+                value={heartbeatSound}
+                onChange={(e) => setHeartbeatSound(e.target.value)}
+                disabled={isPlaying}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50 transition-colors"
+              >
+                <option value="organic">Orgánico</option>
+                <option value="deep">Profundo</option>
+                <option value="muffled">Apagado</option>
+                <option value="strong">Fuerte</option>
+                <option value="electronic">Electrónico</option>
+              </select>
+            )}
+          </div>
+
+          <div className="space-y-6 pt-4">
             {/* Start BPM */}
             <div>
               <div className="flex justify-between mb-2">
@@ -397,8 +823,19 @@ export default function App() {
             </div>
           </div>
 
+          {/* Ambient Sounds */}
+          <div className="space-y-6 pt-6 border-t border-slate-800/50">
+            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4">Sonidos Ambientales</h3>
+            
+            <AmbientSlider icon={<Waves />} label="Mar" value={volSea} onChange={setVolSea} />
+            <AmbientSlider icon={<Wind />} label="Viento" value={volWind} onChange={setVolWind} />
+            <AmbientSlider icon={<Bird />} label="Pájaros" value={volForest} onChange={setVolForest} />
+            <AmbientSlider icon={<Leaf />} label="Plantas" value={volLeaves} onChange={setVolLeaves} />
+            <AmbientSlider icon={<CloudRain />} label="Lluvia" value={volRain} onChange={setVolRain} />
+          </div>
+
           {/* Output Toggles */}
-          <div className="flex gap-4 pt-2">
+          <div className="flex gap-4 pt-6 border-t border-slate-800/50">
             <button
               onClick={() => setVibrationEnabled(!vibrationEnabled)}
               className={`flex-1 flex flex-col items-center justify-center p-4 rounded-2xl border transition-all ${
