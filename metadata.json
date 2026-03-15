@@ -1,0 +1,5 @@
+{
+  "name": "Ritmo de Sueño",
+  "description": "Un metrónomo háptico relajante para ayudarte a dormir reduciendo gradualmente tus pulsaciones.",
+  "requestFramePermissions": ["screen-wake-lock"]
+}
