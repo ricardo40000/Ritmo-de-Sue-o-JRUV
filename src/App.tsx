@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Square, Volume2, VolumeX, Vibrate, VibrateOff, Info, Moon, Heart, Activity, Waves, Wind, Bird, Leaf, CloudRain } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -9,6 +9,31 @@ const formatTime = (seconds: number) => {
 };
 
 const SILENT_AUDIO_URI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
+// Web Worker for unthrottled background timer
+const workerCode = `
+  let timerId = null;
+  self.onmessage = function(e) {
+    if (e.data.command === 'start') {
+      if (timerId) clearTimeout(timerId);
+      const tick = () => {
+        self.postMessage('tick');
+        timerId = setTimeout(tick, e.data.interval);
+      };
+      timerId = setTimeout(tick, e.data.interval);
+    } else if (e.data.command === 'stop') {
+      if (timerId) clearTimeout(timerId);
+      timerId = null;
+    } else if (e.data.command === 'update') {
+      if (timerId) clearTimeout(timerId);
+      const tick = () => {
+        self.postMessage('tick');
+        timerId = setTimeout(tick, e.data.interval);
+      };
+      timerId = setTimeout(tick, e.data.interval);
+    }
+  };
+`;
 
 const createNoiseBuffer = (ctx: AudioContext, type: 'white' | 'pink') => {
   const bufferSize = ctx.sampleRate * 2;
@@ -232,6 +257,7 @@ export default function App() {
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const ambientNodesRef = useRef<any>({});
   const settingsRef = useRef({
     mode, pulseType, startBpm, minBpm, durationMins, intensity, vibrationEnabled, soundEnabled, singleSound, heartbeatSound
@@ -260,7 +286,6 @@ export default function App() {
     }
 
     if (isPlaying) {
-      silentAudioRef.current.play().catch(e => console.log("Silent audio play failed:", e));
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: 'Latido Relajante',
@@ -360,9 +385,7 @@ export default function App() {
       silentSource.start();
     }
 
-    let timeoutId: number;
     const startTime = Date.now();
-    let expectedTime = startTime;
 
     const tick = () => {
       const now = Date.now();
@@ -385,19 +408,6 @@ export default function App() {
       setCurrentBpm(Math.round(bpm));
       setTimeRemaining(Math.max(0, Math.ceil((durationMs - elapsedTotal) / 1000)));
 
-      // Play pulse (Vibration)
-      if (vibrationEnabled && 'vibrate' in navigator) {
-        // Map intensity 1-100 to duration 10ms-150ms
-        const duration = 10 + (intensity / 100) * 140;
-        if (pulseType === 'heartbeat') {
-          // Double pulse for heartbeat
-          navigator.vibrate([duration, 150, duration * 0.8]);
-        } else {
-          // Single pulse
-          navigator.vibrate(duration);
-        }
-      }
-      
       // Play pulse (Sound)
       if (soundEnabled && audioCtxRef.current) {
         const ctx = audioCtxRef.current;
@@ -599,6 +609,15 @@ export default function App() {
           playSound(0, false);
         }
       }
+
+      // Vibrate
+      if (vibrationEnabled && 'vibrate' in navigator) {
+        if (pulseType === 'heartbeat') {
+          navigator.vibrate([40, 100, 40]);
+        } else {
+          navigator.vibrate(50);
+        }
+      }
       
       setPulseTrigger(prev => prev + 1);
       
@@ -610,17 +629,25 @@ export default function App() {
       }
 
       const intervalMs = 60000 / bpm;
-      expectedTime += intervalMs;
-      const delay = Math.max(0, expectedTime - Date.now());
-
-      timeoutId = window.setTimeout(tick, delay);
+      workerRef.current!.postMessage({ command: 'update', interval: intervalMs });
     };
 
-    // Start first tick
+    // Initialize Web Worker
+    if (!workerRef.current) {
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      workerRef.current = new Worker(URL.createObjectURL(blob));
+    }
+
+    // Start first tick and setup worker listener
     tick();
+    workerRef.current.onmessage = (e) => {
+      if (e.data === 'tick') tick();
+    };
 
     return () => {
-      window.clearTimeout(timeoutId);
+      if (workerRef.current) {
+        workerRef.current.postMessage({ command: 'stop' });
+      }
       if (silentSource) {
         silentSource.stop();
       }
@@ -632,6 +659,14 @@ export default function App() {
   }, [isPlaying]);
 
   const togglePlay = () => {
+    if (!isPlaying) {
+      if (silentAudioRef.current) {
+        silentAudioRef.current.play().catch(e => console.log("Silent audio play failed:", e));
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+    }
     setIsPlaying(!isPlaying);
   };
 
